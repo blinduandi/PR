@@ -1,0 +1,27 @@
+services:
+  http-file-server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount content directory for easy file updates
+      - ./content:/app/content:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    container_name: pr-lab1-http-server
+    
+  # Optional client service for testing
+  http-client:
+    build: .
+    volumes:
+      - ./downloads:/app/downloads
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - http-file-server
+    container_name: pr-lab1-http-client
+    # This service will exit immediately unless overridden
+    command: ["python", "--version"]
+    profiles:
+      - client
