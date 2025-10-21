@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lab 2 — Concurrency Dashboard</title>
+  <style>
+    :root {
+      --bg: #0e1116; --panel: #151a22; --border: #222a35; --muted: #9aa5b1; --text: #e5e7eb; --accent: #67b3ff;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; color: var(--text); background: radial-gradient(1200px 800px at 20% -20%, #141a24, var(--bg)); }
+    h1 { margin: 0 0 6px; font-weight: 600; }
+    .subtitle { margin: 0 0 18px; color: var(--muted); }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; box-shadow: 0 8px 20px rgba(0,0,0,.12); }
+    .row-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .pill { display: inline-flex; align-items:center; gap:6px; background: #0f141c; border:1px solid var(--border); padding:4px 8px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+    .accent { color: var(--accent); }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; }
+    th { color: var(--muted); font-weight: 600; }
+    button { padding: 8px 12px; background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: border-color .15s, background .15s; }
+    button:hover { border-color: var(--accent); background: rgba(103,179,255,0.08); }
+    input { background: #0f131a; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+    #fire-result { color: var(--muted); }
+    canvas.spark { width: 100%; height: 60px; display: block; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Concurrent HTTP Server</h1>
+  <div class="subtitle">Visualize concurrency, counters, and rate limiting</div>
+  <div class="row">
+    <div class="card">
+      <h3>Server Info</h3>
+      <div id="info" class="subtitle">Loading...</div>
+      <div class="row-inline">
+        <button id="btn-ping">Ping</button>
+        <span class="pill">Status <strong id="ping-status">…</strong></span>
+        <span class="pill">Inflight <strong class="accent" id="inflight">0</strong></span>
+      </div>
+      <canvas id="spark" class="spark"></canvas>
+    </div>
+
+    <div class="card">
+      <h3>Controls</h3>
+      <div class="row-inline"><label>Target path: <input id="path" value="/index.html" /></label></div>
+      <div class="row-inline"><label>Requests (N): <input id="num" type="number" value="10" min="1" max="500" /></label></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="btn-fire">Fire N concurrent</button>
+        <button id="btn-fire-seq">Fire N sequential</button>
+        <button id="btn-reset">Reset counters</button>
+      </div>
+      <div id="fire-result" style="margin-top:6px"></div>
+      <div class="terminal" id="runlog" style="margin-top:8px; max-height: 180px;"></div>
+    </div>
+
+    <!-- Lab Test Card -->
+    <div class="card">
+      <h3>🧪 Real Lab Comparison</h3>
+      <div class="subtitle">Test actual Lab 1 vs Lab 2 servers (no artificial delays)</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+        <button id="btn-real-lab-test">Test Lab 1 vs Lab 2 (Browser)</button>
+        <button id="btn-show-powershell">Show PowerShell Test</button>
+        <button id="btn-lab-test">Lab 2 Internal Test</button>
+        <button id="btn-lab-compare">Lab 2 Concurrent vs Sequential</button>
+      </div>
+      <div style="margin-bottom:8px; font-size:13px; color:#9aa5b1;">
+        Lab 1: <span id="lab1-url">http://localhost:8001/</span> | 
+        Lab 2: <span id="lab2-url">http://localhost:8888/index.html</span>
+      </div>
+      <div id="lab-results" style="margin-top:6px; font-family: ui-monospace, monospace; font-size: 13px;"></div>
+    </div>
+
+    <!-- Race Condition Demo Card -->
+    <div class="card">
+      <h3>⚔️ Race Condition Demo</h3>
+      <div class="subtitle">Compare naive vs locked counter under concurrent load</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+        <button id="btn-test-naive">Test Current Counter (50 requests)</button>
+        <button id="btn-race-compare">How to See Race Conditions</button>
+      </div>
+      <div style="margin-bottom:8px; font-size:13px; color:#9aa5b1;">
+        Sends 50 concurrent requests to demonstrate lost increments vs correct counting
+      </div>
+      <div id="race-results" style="margin-top:6px; font-family: ui-monospace, monospace; font-size: 13px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="row-inline" style="justify-content: space-between;">
+        <h3 style="margin:0">Counters</h3>
+        <button id="btn-refresh">Refresh</button>
+      </div>
+      <table>
+        <thead><tr><th>Path</th><th>Count</th></tr></thead>
+        <tbody id="counts"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Run History -->
+  <div class="card" style="margin-top:16px;">
+    <div class="row-inline" style="justify-content: space-between;">
+      <h3 style="margin:0">Run history</h3>
+      <small class="subtitle">Recent runs with status mix</small>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Mode</th><th>Path</th><th>N</th><th>200</th><th>429</th><th>Other</th><th>Time (s)</th><th>When</th>
+        </tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </div>
+
+  <script>
+    async function getJSON(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(await r.text());
+      return await r.json();
+    }
+    async function refreshInfo() {
+      try {
+        const info = await getJSON('/api/info');
+        document.getElementById('info').textContent = JSON.stringify(info);
+      } catch (e) {
+        document.getElementById('info').textContent = 'Error: ' + e;
+      }
+    }
+    // Sparkline state and drawing
+    const sparkData = [];
+    const sparkMax = 80;
+    function drawSpark() {
+      const canvas = document.getElementById('spark');
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width = canvas.clientWidth;
+      const h = canvas.height = canvas.clientHeight;
+      ctx.clearRect(0,0,w,h);
+      // baseline
+      ctx.strokeStyle = '#2a3342'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, h-1); ctx.lineTo(w, h-1); ctx.stroke();
+      if (!sparkData.length) return;
+      const minV = 0;
+      const maxV = Math.max(...sparkData, 1);
+      ctx.strokeStyle = 'rgba(103,179,255,0.9)'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      sparkData.forEach((v, i) => {
+        const x = (i / Math.max(1, sparkData.length-1)) * (w-2) + 1;
+        const y = h - 1 - ((v - minV) / Math.max(1, (maxV - minV))) * (h-6) - 2;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = '#9aa5b1'; ctx.font = '12px ui-sans-serif, system-ui';
+      ctx.fillText(`inflight: ${sparkData[sparkData.length-1] ?? 0}`, 8, 14);
+    }
+    async function refreshInflight() {
+      try {
+        const data = await getJSON('/api/inflight');
+        document.getElementById('inflight').textContent = data.inflight;
+        sparkData.push(data.inflight); if (sparkData.length > sparkMax) sparkData.shift();
+        drawSpark();
+      } catch (e) { /* ignore */ }
+    }
+    async function refreshCounts() {
+      try {
+        const data = await getJSON('/api/counter');
+        const tbody = document.getElementById('counts');
+        tbody.innerHTML = '';
+        Object.keys(data).sort().forEach(k => {
+          const tr = document.createElement('tr');
+          const td1 = document.createElement('td'); td1.textContent = k;
+          const td2 = document.createElement('td'); td2.textContent = data[k];
+          tr.appendChild(td1); tr.appendChild(td2); tbody.appendChild(tr);
+        });
+      } catch (e) {
+        document.getElementById('counts').innerHTML = '<tr><td colspan="2">Error: ' + e + '</td></tr>';
+      }
+    }
+    async function ping() {
+      try { const r = await getJSON('/api/ping'); document.getElementById('ping-status').textContent = r.ok ? 'OK' : 'Failed'; }
+      catch (e) { document.getElementById('ping-status').textContent = 'Error'; }
+    }
+    function logRun(lineHtml) {
+      const term = document.getElementById('runlog');
+      const div = document.createElement('div');
+      div.className = 'log';
+      div.innerHTML = lineHtml;
+      term.appendChild(div);
+      term.scrollTop = term.scrollHeight;
+    }
+    function explainStatus(code) {
+      switch (code) {
+        case 200: return 'OK';
+        case 404: return 'Not Found';
+        case 429: return 'Too many requests (rate limiting)';
+        case 499: return 'Client closed request';
+        default: return 'Error';
+      }
+    }
+    let __runCounter = 0;
+    function addHistoryEntry({mode, path, n, ok, tooMany, other, totalSec}) {
+      __runCounter += 1;
+      const when = new Date().toLocaleTimeString();
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${__runCounter}</td>
+        <td>${mode}</td>
+        <td><code>${path}</code></td>
+        <td>${n}</td>
+        <td>${ok}</td>
+        <td>${tooMany}</td>
+        <td>${other}</td>
+        <td>${totalSec.toFixed(3)}</td>
+        <td>${when}</td>
+      `;
+      document.getElementById('history-body').prepend(tr);
+    }
+
+    async function fire() {
+      const path = document.getElementById('path').value || '/';
+      const n = parseInt(document.getElementById('num').value || '10', 10);
+      const t0 = performance.now();
+      document.getElementById('runlog').innerHTML = '';
+      let ok = 0, tooMany = 0, other = 0;
+      const tasks = [];
+      for (let i = 0; i < n; i++) {
+        const idx = i + 1;
+        const start = performance.now();
+        const bust = Date.now() + '-' + idx;
+        const url = path.includes('?') ? `${path}&_=${bust}` : `${path}?_=${bust}`;
+        const p = fetch(url, { cache: 'no-store' }).then(async (res) => {
+          const dt = (performance.now() - start).toFixed(1);
+          const status = res.status;
+          if (res.ok) ok++;
+          else if (status === 429) tooMany++;
+          else other++;
+          const statusClass = res.ok ? 'ok' : 'warn';
+          const ts = new Date().toISOString().split('T')[1].replace('Z','');
+          logRun(`<span class="ts">${ts}</span> #${idx} GET <span class="path">${path}</span> <span class="${statusClass}">${status}</span> ${dt}ms — ${explainStatus(status)}`);
+        }).catch((err) => {
+          const dt = (performance.now() - start).toFixed(1);
+          const ts = new Date().toISOString().split('T')[1].replace('Z','');
+          logRun(`<span class="ts">${ts}</span> #${idx} GET <span class="path">${path}</span> <span class="warn">ERR</span> ${dt}ms — ${err}`);
+          other++;
+        });
+        tasks.push(p);
+      }
+      await Promise.allSettled(tasks);
+      const total = ((performance.now() - t0) / 1000).toFixed(3);
+      document.getElementById('fire-result').textContent = `Concurrent: requested ${n}, ok ${ok}, time ${total}s`;
+      addHistoryEntry({mode:'concurrent', path, n, ok, tooMany, other, totalSec: parseFloat(total)});
+      await refreshCounts();
+    }
+    async function fireSequential() {
+      const path = document.getElementById('path').value || '/';
+      const n = parseInt(document.getElementById('num').value || '10', 10);
+      const t0 = performance.now();
+      document.getElementById('runlog').innerHTML = '';
+      let ok = 0, tooMany = 0, other = 0;
+      for (let i = 0; i < n; i++) {
+        const idx = i + 1;
+        const start = performance.now();
+        try {
+          const bust = Date.now() + '-' + idx;
+          const url = path.includes('?') ? `${path}&_=${bust}` : `${path}?_=${bust}`;
+          const r = await fetch(url, { cache: 'no-store' });
+          const dt = (performance.now() - start).toFixed(1);
+          const status = r.status;
+          if (r.ok) ok++;
+          else if (status === 429) tooMany++;
+          else other++;
+          const statusClass = r.ok ? 'ok' : 'warn';
+          const ts = new Date().toISOString().split('T')[1].replace('Z','');
+          logRun(`<span class="ts">${ts}</span> #${idx} GET <span class="path">${path}</span> <span class="${statusClass}">${status}</span> ${dt}ms — ${explainStatus(status)}`);
+        } catch (e) {
+          const dt = (performance.now() - start).toFixed(1);
+          const ts = new Date().toISOString().split('T')[1].replace('Z','');
+          logRun(`<span class="ts">${ts}</span> #${idx} GET <span class="path">${path}</span> <span class="warn">ERR</span> ${dt}ms — ${e}`);
+          other++;
+        }
+      }
+      const dt = (performance.now() - t0) / 1000.0;
+      document.getElementById('fire-result').textContent = `Sequential: requested ${n}, ok ${ok}, time ${dt.toFixed(3)}s`;
+      addHistoryEntry({mode:'sequential', path, n, ok, tooMany, other, totalSec: dt});
+      await refreshCounts();
+    }
+    async function resetCounters() {
+      try {
+        await getJSON('/api/reset');
+        await refreshCounts();
+      } catch (e) {
+        alert('Reset failed: ' + e);
+      }
+    }
+
+    document.getElementById('btn-refresh').addEventListener('click', refreshCounts);
+    document.getElementById('btn-ping').addEventListener('click', ping);
+    document.getElementById('btn-fire').addEventListener('click', fire);
+    document.getElementById('btn-fire-seq').addEventListener('click', fireSequential);
+    document.getElementById('btn-reset').addEventListener('click', resetCounters);
+    document.getElementById('btn-real-lab-test').addEventListener('click', runRealLabComparison);
+    document.getElementById('btn-show-powershell').addEventListener('click', showPowerShellTest);
+    document.getElementById('btn-lab-test').addEventListener('click', runLabTest);
+    document.getElementById('btn-lab-compare').addEventListener('click', runLabComparison);
+    document.getElementById('btn-test-naive').addEventListener('click', () => testRaceCondition('current'));
+    document.getElementById('btn-race-compare').addEventListener('click', compareRaceCondition);
+    
+    function showPowerShellTest() {
+      const resultsDiv = document.getElementById('lab-results');
+      resultsDiv.innerHTML = `
+        <div style="color: #67b3ff;">💻 PowerShell Lab Test Commands</div>
+        <div style="margin-top:8px; padding:12px; background:#0a0e14; border:1px solid #1c2530; border-radius:8px; font-family:ui-monospace,monospace; font-size:12px;">
+          <div style="color:#7ad97a; margin-bottom:8px;">## 1. Start Lab 1 Server (if not running)</div>
+          <div style="color:#9aa5b1;">cd "C:\\Users\\andib\\OneDrive\\Desktop\\FAF\\PR\\Lab 1"</div>
+          <div style="color:#9aa5b1;">python -m http.server 8001</div>
+          
+          <div style="color:#7ad97a; margin:12px 0 8px;">## 2. Run Comparison Test</div>
+          <div style="color:#9aa5b1;">cd "C:\\Users\\andib\\OneDrive\\Desktop\\FAF\\PR\\Lab 2"</div>
+          <div style="color:#67b3ff;">python client/lab_test.py --requests 10</div>
+          
+          <div style="color:#7ad97a; margin:12px 0 8px;">## 3. Expected Results</div>
+          <div style="color:#ffb767;">Lab 1 (Single): ~0.5s (some requests queued)</div>
+          <div style="color:#67b3ff;">Lab 2 (Multi): ~0.05s (all parallel)</div>
+          <div style="color:#7ad97a;">Speedup: ~10x improvement!</div>
+        </div>
+        <div style="margin-top:8px; font-size:11px; color:#9aa5b1;">
+          💡 PowerShell bypasses CORS restrictions and gives accurate network timing.
+        </div>
+      `;
+    }
+
+    async function runRealLabComparison() {
+      const resultsDiv = document.getElementById('lab-results');
+      const lab1Url = 'http://localhost:8001/';
+      const lab2Url = 'http://localhost:8888/index.html';
+      const n = 10;
+      
+      resultsDiv.innerHTML = '<div style="color: #67b3ff;">🧪 Testing Real Lab 1 vs Lab 2 servers...</div>';
+      
+      // Test Lab 1 (Real single-threaded server)
+      resultsDiv.innerHTML += '<br><div>Testing Lab 1 (Single-threaded)...</div>';
+      const lab1Start = performance.now();
+      let lab1Success = 0, lab1Failed = 0, lab1Error = '';
+      const lab1Tasks = [];
+      
+      for (let i = 0; i < n; i++) {
+        const p = fetch(lab1Url, { 
+          cache: 'no-store',
+          mode: 'cors',
+          credentials: 'omit'
+        }).then(res => {
+          if (res.ok) lab1Success++; else lab1Failed++;
+          return res.status;
+        }).catch(err => { 
+          lab1Failed++; 
+          if (!lab1Error) lab1Error = err.message;
+          return 0; 
+        });
+        lab1Tasks.push(p);
+      }
+      
+      await Promise.allSettled(lab1Tasks);
+      const lab1Time = (performance.now() - lab1Start) / 1000;
+      
+      // Wait before testing Lab 2
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Test Lab 2 (Multithreaded server)
+      resultsDiv.innerHTML += '<div>Testing Lab 2 (Multithreaded)...</div>';
+      const lab2Start = performance.now();
+      let lab2Success = 0, lab2Failed = 0, lab2Error = '';
+      const lab2Tasks = [];
+      
+      for (let i = 0; i < n; i++) {
+        const bust = Date.now() + '-lab2-' + (i+1);
+        const url = lab2Url.includes('?') ? `${lab2Url}&_=${bust}` : `${lab2Url}?_=${bust}`;
+        const p = fetch(url, { cache: 'no-store' }).then(res => {
+          if (res.ok) lab2Success++; else lab2Failed++;
+          return res.status;
+        }).catch(err => { 
+          lab2Failed++; 
+          if (!lab2Error) lab2Error = err.message;
+          return 0; 
+        });
+        lab2Tasks.push(p);
+      }
+      
+      await Promise.allSettled(lab2Tasks);
+      const lab2Time = (performance.now() - lab2Start) / 1000;
+      
+      // Calculate results
+      const speedup = lab1Time > 0 ? lab1Time / lab2Time : 0;
+      
+      resultsDiv.innerHTML = `
+        <div style="color: #7ad97a;">✅ Real Lab Comparison Complete</div>
+        <table style="margin-top:8px; border-collapse:collapse; width:100%; font-size:12px;">
+          <tr style="border-bottom:1px solid #333;">
+            <th style="text-align:left; padding:4px;">Server</th>
+            <th style="text-align:right; padding:4px;">Time</th>
+            <th style="text-align:right; padding:4px;">Success</th>
+            <th style="text-align:left; padding:4px;">Status</th>
+          </tr>
+          <tr>
+            <td style="padding:4px;">Lab 1</td>
+            <td style="padding:4px; text-align:right;">${lab1Time.toFixed(3)}s</td>
+            <td style="padding:4px; text-align:right; color:${lab1Success > 0 ? '#7ad97a' : '#ffb767'}">${lab1Success}/${n}</td>
+            <td style="padding:4px; font-size:11px;">${lab1Success > 0 ? 'Single-threaded' : 'CORS/Connection Error'}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px;">Lab 2</td>
+            <td style="padding:4px; text-align:right;">${lab2Time.toFixed(3)}s</td>
+            <td style="padding:4px; text-align:right; color:${lab2Success > 0 ? '#7ad97a' : '#ffb767'}">${lab2Success}/${n}</td>
+            <td style="padding:4px; font-size:11px;">${lab2Success > 0 ? 'Multithreaded' : 'Connection Error'}</td>
+          </tr>
+        </table>
+        <div style="margin-top:8px;">
+          <strong>Performance Ratio:</strong> ${speedup > 0 && lab1Success > 0 && lab2Success > 0 ? speedup.toFixed(1) + 'x speedup' : 'Cannot calculate'}
+        </div>
+        <div style="margin-top:8px; color: #9aa5b1; font-size:12px;">
+          ${lab1Success === 0 && lab2Success > 0 ? 
+            '⚠️ Lab 1 CORS issue. Use PowerShell test: <code>python client/lab_test.py</code>' :
+            lab2Success === 0 ? '❌ Lab 2 not reachable. Check Docker container at port 8888.' :
+            lab1Success > 0 && lab2Success > 0 && speedup > 1.5 ? 
+            '🎯 Lab 2 faster! Multithreaded vs single-threaded confirmed.' :
+            lab1Success > 0 && lab2Success > 0 && speedup < 0.8 ?
+            '⚡ Lab 2 optimized - both fast for static files, but different architectures.' :
+            lab1Success > 0 && lab2Success > 0 ?
+            '📊 Similar performance - both handle static files well.' :
+            '🧪 Mixed results - check server availability.'}
+        </div>
+        ${lab1Success === 0 || lab2Success === 0 ? `
+          <div style="margin-top:8px; padding:8px; background:#1a1f2e; border-radius:6px; font-size:11px;">
+            <strong>💡 Alternative Test (PowerShell):</strong><br>
+            <code style="color:#67b3ff;">python client/lab_test.py --requests 20</code><br>
+            <span style="color:#9aa5b1;">This bypasses browser CORS restrictions for accurate comparison.</span>
+          </div>
+        ` : ''}
+        <div style="margin-top:4px; font-size:11px; color:#6b7685;">
+          Lab 1: Real server from Lab 1 directory | Lab 2: Current Docker container
+        </div>
+      `;
+    }
+
+    async function runLabTest() {
+      const resultsDiv = document.getElementById('lab-results');
+      resultsDiv.innerHTML = '<div style="color: #67b3ff;">🚀 Running 10 concurrent requests (no artificial delay)...</div>';
+      
+      const path = '/index.html';
+      const n = 10;
+      const t0 = performance.now();
+      
+      let successful = 0, failed = 0;
+      const tasks = [];
+      
+      for (let i = 0; i < n; i++) {
+        const bust = Date.now() + '-' + (i+1);
+        const url = path.includes('?') ? `${path}&_=${bust}` : `${path}?_=${bust}`;
+        const p = fetch(url, { cache: 'no-store' }).then(res => {
+          if (res.ok) successful++; else failed++;
+          return res.status;
+        }).catch(() => { failed++; return 0; });
+        tasks.push(p);
+      }
+      
+      await Promise.allSettled(tasks);
+      const totalTime = ((performance.now() - t0) / 1000);
+      
+      resultsDiv.innerHTML = `
+        <div style="color: #7ad97a;">✅ Lab 2 Internal Test Complete</div>
+        <div><strong>Total Time:</strong> ${totalTime.toFixed(3)}s</div>
+        <div><strong>Successful:</strong> ${successful} / ${n}</div>
+        <div><strong>Throughput:</strong> ${(successful/totalTime).toFixed(1)} req/sec</div>
+        <div style="margin-top:8px; color: #9aa5b1;">
+          ${totalTime < 0.1 ? '⚡ Excellent concurrent performance!' : 
+            totalTime < 1 ? '🎯 Good concurrent program executing in parallel!' :
+            '⚠️ Check server configuration or network latency.'}
+        </div>
+      `;
+    }
+    
+    async function runLabComparison() {
+      const resultsDiv = document.getElementById('lab-results');
+      resultsDiv.innerHTML = '<div style="color: #67b3ff;">🔄 Running comparison test...</div>';
+      
+      const path = '/index.html';
+      const n = 10;
+      
+      // Test 1: Concurrent
+      resultsDiv.innerHTML += '<br><div>📊 Running concurrent test...</div>';
+      const concurrentStart = performance.now();
+      let concurrentSuccess = 0;
+      const concurrentTasks = [];
+      
+      for (let i = 0; i < n; i++) {
+        const bust = Date.now() + '-conc-' + (i+1);
+        const url = path.includes('?') ? `${path}&_=${bust}` : `${path}?_=${bust}`;
+        const p = fetch(url, { cache: 'no-store' }).then(res => {
+          if (res.ok) concurrentSuccess++;
+          return res.status;
+        }).catch(() => 0);
+        concurrentTasks.push(p);
+      }
+      
+      await Promise.allSettled(concurrentTasks);
+      const concurrentTime = (performance.now() - concurrentStart) / 1000;
+      
+      // Wait before sequential test
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Test 2: Sequential  
+      resultsDiv.innerHTML += '<div>📊 Running sequential test...</div>';
+      const sequentialStart = performance.now();
+      let sequentialSuccess = 0;
+      
+      for (let i = 0; i < n; i++) {
+        try {
+          const bust = Date.now() + '-seq-' + (i+1);
+          const url = path.includes('?') ? `${path}&_=${bust}` : `${path}?_=${bust}`;
+          const res = await fetch(url, { cache: 'no-store' });
+          if (res.ok) sequentialSuccess++;
+        } catch (e) { /* ignore */ }
+      }
+      
+      const sequentialTime = (performance.now() - sequentialStart) / 1000;
+      const speedup = sequentialTime / concurrentTime;
+      
+      resultsDiv.innerHTML = `
+        <div style="color: #7ad97a;">✅ Comparison Complete</div>
+        <table style="margin-top:8px; border-collapse:collapse; width:100%; font-size:12px;">
+          <tr style="border-bottom:1px solid #333;">
+            <th style="text-align:left; padding:4px;">Mode</th>
+            <th style="text-align:right; padding:4px;">Time</th>
+            <th style="text-align:right; padding:4px;">Success</th>
+          </tr>
+          <tr>
+            <td style="padding:4px;">Concurrent</td>
+            <td style="padding:4px; text-align:right;">${concurrentTime.toFixed(3)}s</td>
+            <td style="padding:4px; text-align:right;">${concurrentSuccess}/${n}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px;">Sequential</td>
+            <td style="padding:4px; text-align:right;">${sequentialTime.toFixed(3)}s</td>
+            <td style="padding:4px; text-align:right;">${sequentialSuccess}/${n}</td>
+          </tr>
+        </table>
+        <div style="margin-top:8px;">
+          <strong>Speedup:</strong> ${speedup.toFixed(1)}x
+        </div>
+        <div style="margin-top:8px; color: #9aa5b1;">
+          ${speedup > 5 ? '🎯 Concurrent program + parallel execution!' : 
+            speedup > 2 ? '👍 Concurrent program + some parallelism.' :
+            speedup > 1.2 ? '⚠️ Concurrent program + limited parallelism.' :
+            '❌ No parallelism. Concurrent program running sequentially.'}
+        </div>
+      `;
+    }
+
+    async function testRaceCondition(counterMode) {
+      const resultsDiv = document.getElementById('race-results');
+      const n = 50; // More requests to increase chance of race
+      const testPath = `/race-test-${counterMode}`;
+      
+      resultsDiv.innerHTML = `<div style="color: #67b3ff;">🧪 Testing ${counterMode} counter with ${n} concurrent requests...</div>`;
+      
+      // First, switch server to the desired counter mode via API call
+      try {
+        // Reset counters first
+        await fetch('/api/reset', { cache: 'no-store' });
+        
+        // Note: We can't actually switch counter mode dynamically, so we'll simulate
+        // by testing the current server behavior and explaining what would happen
+        
+        const startCount = await fetch('/api/counter', { cache: 'no-store' }).then(r => r.json());
+        const initialCount = startCount[testPath] || 0;
+        
+        const start = performance.now();
+        const tasks = [];
+        
+        for (let i = 0; i < n; i++) {
+          const bust = Date.now() + '-race-' + counterMode + '-' + (i+1);
+          const url = testPath.includes('?') ? `${testPath}&_=${bust}` : `${testPath}?_=${bust}`;
+          const p = fetch(url, { cache: 'no-store' }).then(res => res.status).catch(() => 0);
+          tasks.push(p);
+        }
+        
+        await Promise.allSettled(tasks);
+        const totalTime = (performance.now() - start) / 1000;
+        
+        // Get final count
+        const endCount = await fetch('/api/counter', { cache: 'no-store' }).then(r => r.json());
+        const finalCount = endCount[testPath] || 0;
+        const actualIncrement = finalCount - initialCount;
+        const lostUpdates = n - actualIncrement;
+        
+        resultsDiv.innerHTML = `
+          <div style="color: #7ad97a;">✅ ${counterMode.toUpperCase()} Counter Test Complete</div>
+          <table style="margin-top:8px; border-collapse:collapse; width:100%; font-size:12px;">
+            <tr style="border-bottom:1px solid #333;">
+              <th style="text-align:left; padding:4px;">Metric</th>
+              <th style="text-align:right; padding:4px;">Value</th>
+            </tr>
+            <tr>
+              <td style="padding:4px;">Requests Sent</td>
+              <td style="padding:4px; text-align:right;">${n}</td>
+            </tr>
+            <tr>
+              <td style="padding:4px;">Counter Increments</td>
+              <td style="padding:4px; text-align:right; color:${actualIncrement === n ? '#7ad97a' : '#ffb767'}">${actualIncrement}</td>
+            </tr>
+            <tr>
+              <td style="padding:4px;">Lost Updates</td>
+              <td style="padding:4px; text-align:right; color:${lostUpdates === 0 ? '#7ad97a' : '#ff7b7b'}">${lostUpdates}</td>
+            </tr>
+            <tr>
+              <td style="padding:4px;">Total Time</td>
+              <td style="padding:4px; text-align:right;">${totalTime.toFixed(3)}s</td>
+            </tr>
+          </table>
+          <div style="margin-top:8px; color: #9aa5b1;">
+            ${lostUpdates === 0 ? 
+              '🎯 Perfect! No race condition detected.' :
+              `⚔️ Race condition! ${lostUpdates} lost updates due to unsynchronized access.`}
+          </div>
+          <div style="margin-top:4px; font-size:11px; color:#6b7685;">
+            Current server uses: ${counterMode === 'naive' ? 'Locked counter (simulated naive behavior)' : 'Locked counter (thread-safe)'}
+          </div>
+        `;
+      } catch (error) {
+        resultsDiv.innerHTML = `
+          <div style="color: #ff7b7b;">❌ Test Failed</div>
+          <div style="margin-top:4px; font-size:12px;">Error: ${error.message}</div>
+        `;
+      }
+    }
+
+    async function compareRaceCondition() {
+      const resultsDiv = document.getElementById('race-results');
+      resultsDiv.innerHTML = `
+        <div style="color: #67b3ff;">🔄 Race Condition Comparison</div>
+        <div style="margin-top:8px; padding:12px; background:#0a0e14; border:1px solid #1c2530; border-radius:8px; font-size:12px;">
+          <div style="color:#ffb767; margin-bottom:8px;">⚠️ Current Server Configuration</div>
+          <div style="color:#9aa5b1; margin-bottom:8px;">Your server is running with <strong>COUNTER_MODE=locked</strong> (thread-safe)</div>
+          
+          <div style="color:#7ad97a; margin:12px 0 8px;">🎯 To See Real Race Conditions:</div>
+          <div style="color:#9aa5b1; margin:4px 0;">1. Stop current server</div>
+          <div style="color:#9aa5b1; margin:4px 0;">2. Start with naive counter:</div>
+          <div style="background:#151a22; padding:6px; border-radius:4px; margin:4px 0; font-family:ui-monospace,monospace;">
+            <span style="color:#67b3ff;">$env:COUNTER_MODE='naive'</span><br>
+            <span style="color:#67b3ff;">docker compose up --build -d</span>
+          </div>
+          <div style="color:#9aa5b1; margin:4px 0;">3. Run test again - you'll see lost updates!</div>
+          
+          <div style="color:#7ad97a; margin:12px 0 8px;">📊 Expected Results:</div>
+          <table style="border-collapse:collapse; width:100%; font-size:11px; margin:4px 0;">
+            <tr style="border-bottom:1px solid #333;">
+              <th style="text-align:left; padding:3px;">Counter Type</th>
+              <th style="text-align:right; padding:3px;">50 Requests</th>
+              <th style="text-align:left; padding:3px;">Lost Updates</th>
+            </tr>
+            <tr>
+              <td style="padding:3px; color:#ff7b7b;">Naive</td>
+              <td style="padding:3px; text-align:right; color:#ff7b7b;">35-45</td>
+              <td style="padding:3px; color:#ff7b7b;">5-15 lost</td>
+            </tr>
+            <tr>
+              <td style="padding:3px; color:#7ad97a;">Locked</td>
+              <td style="padding:3px; text-align:right; color:#7ad97a;">50</td>
+              <td style="padding:3px; color:#7ad97a;">0 lost</td>
+            </tr>
+          </table>
+          
+          <div style="color:#7ad97a; margin:12px 0 8px;">💡 Why Races Happen:</div>
+          <div style="color:#9aa5b1; font-size:11px;">
+            1. Thread A reads counter = 5<br>
+            2. Thread B reads counter = 5 (same value!)<br>
+            3. Thread A writes counter = 6<br>
+            4. Thread B writes counter = 6 (overwrites A's increment!)<br>
+            5. Result: 2 increments, but counter only increased by 1
+          </div>
+        </div>
+        <div style="margin-top:8px; font-size:11px; color:#9aa5b1;">
+          🔧 Use PowerShell command above to switch to naive mode and see real race conditions!
+        </div>
+      `;
+    }
+
+    refreshInfo();
+    refreshCounts();
+    setInterval(refreshInflight, 300);
+  </script>
+  <style>
+    .terminal {
+      margin-top: 16px; background: #0a0e14; border: 1px solid #1c2530; border-radius: 10px; padding: 12px; color: #a8b3c2;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; max-height: 260px; overflow: auto;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+    }
+    .log { white-space: pre; }
+    .log .ts { color: #6b7685; }
+    .log .ok { color: #7ad97a; }
+    .log .warn { color: #ffb767; }
+    .log .ip { color: #67b3ff; }
+    .log .path { color: #9aa5b1; }
+  </style>
+  <div class="terminal" id="term"></div>
+  <script>
+    let lastLogId = 0;
+    async function pollLogs() {
+      try {
+        const r = await fetch(`/api/logs?since=${lastLogId}`);
+        if (!r.ok) return;
+        const items = await r.json();
+        if (!Array.isArray(items) || items.length === 0) return;
+        const term = document.getElementById('term');
+        const frag = document.createDocumentFragment();
+        items.forEach(e => {
+          lastLogId = Math.max(lastLogId, e.id || 0);
+          const ts = new Date(e.ts * 1000).toISOString().split('T')[1].replace('Z','');
+          const div = document.createElement('div');
+          div.className = 'log';
+          const statusClass = e.status === 200 ? 'ok' : 'warn';
+          div.innerHTML = `<span class="ts">${ts}</span> <span class="ip">${e.ip}</span> `+
+            `${e.method} <span class="path">${e.path}</span> `+
+            `<span class="${statusClass}">${e.status}</span> `+
+            `${e.dur_ms}ms inflight=${e.inflight} thread=${e.thread}`;
+          frag.appendChild(div);
+        });
+        term.appendChild(frag);
+        term.scrollTop = term.scrollHeight;
+      } catch (e) { /* ignore */ }
+    }
+    setInterval(pollLogs, 400);
+  </script>
+</body>
+</html>

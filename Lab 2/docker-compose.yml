@@ -1,0 +1,18 @@
+version: '3.9'
+services:
+  server:
+    build: .
+    image: lab2-http-server:latest
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    environment:
+      - SERVER_PORT=8000
+      - DOC_ROOT=/srv/www
+      - HANDLER_DELAY=${HANDLER_DELAY:-1.0}
+      - COUNTER_MODE=${COUNTER_MODE:-locked}
+      - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-5.0}
+      - RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-10}
+      - SERVER_TYPE=${SERVER_TYPE:-threaded}
+    volumes:
+      - ./www:/srv/www
+    restart: unless-stopped

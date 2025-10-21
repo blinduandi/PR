@@ -1,0 +1,2 @@
+# Using only standard library; left blank intentionally
+# If you want richer logging, you can add 'uvicorn' or 'requests' for client, but we stick to stdlib
