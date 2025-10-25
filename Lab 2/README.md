@@ -94,48 +94,106 @@ Important correctness tweaks:
 
 ## Demos
 
-### 1) Concurrency vs single-threaded
+### 1) Performance Comparison: Single-threaded vs Multi-threaded
 
 ![Single-threaded vs Multithreaded Comparison](./images/single-threded-multi.png)
-*Real lab comparison showing performance difference between Lab 1 (single-threaded) and Lab 2 (multithreaded)*
+*Screenshot showing both timing results: Lab 1 (single-threaded) vs Lab 2 (multi-threaded) performance comparison*
 
-1. Set `HANDLER_delay=1.0`.
-2. In the UI:
-   - Target path `/index.html`, N=10.
-   - Click "Fire N sequential" — total time ≈ 10 seconds (serialized).
-   - Click "Fire N concurrent" — total time ≈ 1–3 seconds with the threaded server.
-3. Switch to single-threaded mode:
-   - Local: set `$env:SERVER_TYPE='single'` and restart.
-   - Docker: set `SERVER_TYPE=single` in compose env or override and restart.
-   - Now "concurrent" acts serialized — time ≈ 10 seconds.
+The image demonstrates the dramatic performance difference:
+- **Lab 1 (Single-threaded)**: ~19.4 seconds for 10 requests (sequential processing)
+- **Lab 2 (Multi-threaded)**: ~2.6 seconds for 10 requests (concurrent processing)
 
-The dashboard includes a "Real Lab Comparison" feature that tests your actual Lab 1 server against Lab 2, showing the concrete performance improvement from single-threaded to multithreaded architecture.
+#### 1-Second Delay Implementation
+Each request includes a mandatory 1-second delay as specified in lab requirements:
+
+```python
+def do_GET(self):
+    # simulate work with 1-second delay
+    time.sleep(self.delay)  # self.delay = 1.0 by default
+    
+    # process request normally
+    super().do_GET()
+```
+
+This delay amplifies the difference between sequential and concurrent processing, making the performance benefits clearly visible.
+
+**Testing Commands:**
+```powershell
+# Test single-threaded server
+python client/lab_test.py --server localhost:8001 --requests 10
+
+# Test multi-threaded server  
+python client/lab_test.py --server localhost:8888 --requests 10
+```
 
 PLT view: Program structure (thread-per-request) = concurrency. Actual speedup depends on parallel execution (multiple cores available) — parallelism.
 
-### 2) Race condition demonstration
+### 2) Race Condition Demonstration
 
 ![Race Condition Demo](./images/race-condition.png)
-*Race condition testing interface showing the difference between naive and locked counters*
+*Screenshot showing race condition test results: requests sent vs successful increments*
 
-1. Start with `COUNTER_MODE='naive'`.
-2. Fire N concurrent to the same path; observe final count < N due to lost updates.
-3. Switch to `COUNTER_MODE='locked'`; repeat — counts match N.
+The screenshot demonstrates the race condition in action - you can see how many requests were sent and how many failed due to concurrent access issues.
 
-The dashboard provides an interactive race condition tester that explains the mechanism and shows how to switch between counter modes to observe the difference.
+#### Problematic Code (Race Condition)
+The naive counter has an intentional race condition in the read-modify-write operation:
 
-### 3) Rate limiting
+```python
+def inc(self, key: str) -> None:
+    current = self._counts.get(key, 0)  # READ
+    time.sleep(0.002)  # Race window amplifier
+    self._counts[key] = current + 1     # WRITE (lost updates!)
+```
+
+#### Fixed Code (Thread-Safe)
+The locked counter prevents race conditions using synchronization:
+
+```python
+def inc(self, key: str) -> None:
+    with self._lock:
+        self._counts[key] = self._counts.get(key, 0) + 1  # Atomic operation
+```
+
+**Testing Process:**
+1. Start with `COUNTER_MODE='naive'` - observe lost increments
+2. Switch to `COUNTER_MODE='locked'` - counts match requests
+3. Use the dashboard's race condition tester for interactive demonstration
+
+### 3) Rate Limiting
 
 ![Rate Limiting](./images/rate-api-limiter.png)
-*Rate limiting in action - API endpoints bypass limits while regular paths are throttled*
+*Screenshot showing 429 "Too Many Requests" responses when rate limit is exceeded*
 
-Default: ~5 req/s per IP (burst 10).
+The screenshot demonstrates rate limiting in action - when multiple requests exceed the configured limit, the server responds with HTTP 429 status codes.
 
-Client demo (local Python):
-```powershell
-python client/spam_vs_polite.py http://localhost:8000/ --seconds 10 --rate 12
+#### Rate Limiting Implementation
+The server uses a token bucket algorithm for per-IP rate limiting:
+
+```python
+def is_allowed(self, client_ip: str) -> bool:
+    if self.limiter.consume(client_ip):
+        return True  # Request allowed
+    # Rate limit exceeded - return 429
+    return False
 ```
-Expected: polite client sustains near limit; spammer receives many 429s. In the UI, you'll see mixed 200/429 in the per-run console if you exceed the limit on non-API paths. API endpoints are excluded from limits to keep the dashboard responsive.
+
+**Default Configuration:**
+- **Rate**: ~5 requests/second per IP
+- **Burst**: 10 requests (token bucket capacity)
+- **Response**: HTTP 429 "Too Many Requests" when exceeded
+
+**Testing Commands:**
+```powershell
+# Test rate limiting with spam requests
+python client/spam_vs_polite.py http://localhost:8000/ --seconds 10 --rate 12
+
+# Expected: polite client sustains ~5 req/s, spammer gets many 429s
+```
+
+**Key Features:**
+- Per-IP isolation (different IPs have separate limits)
+- API endpoints (`/api/*`) bypass rate limits for dashboard functionality
+- Real-time statistics available at `/stats` endpoint
 
 ## Single-threaded vs Multithreaded Comparison
 
@@ -204,18 +262,6 @@ Live visualization of:
 - **Request Throttling**: 429 responses when limits exceeded
 - **API Bypass**: How `/api/` endpoints avoid rate limits
 - **Throughput Analysis**: Successful vs rejected request rates
-
-## Mapping to lab requirements
-This repository provides all required deliverables and demonstrations:
-
-- **Multithreaded HTTP server** (thread-per-request) and a single-threaded mode for comparison.
-- **Benchmark scripts and UI** to issue 10 concurrent requests with ~1s handler delay and measure total time; comparison against single-threaded server.
-- **Counter (2 pts)**:
-  - Naive counter with intentional race (unsynchronized read-modify-write) to show lost increments.
-  - Locked counter using `threading.Lock` that eliminates the race; counts match the number of requests.
-  - Counts displayed in the directory listing and via `/api/counter`.
-- **Rate limiting (2 pts)**:
-  - Thread-safe per‑IP token bucket at ~5 req/s; UI and `client/spam_vs_polite.py` demonstrate throughput differences between a spammer and a polite client.
 
 ### Key observations from testing:
 - **Concurrency vs parallelism**: Lab comparison shows sequential time ≈ N×delay vs concurrent time ≈ delay in the threaded server; switching to single-threaded makes concurrent behave sequentially.
